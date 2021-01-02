@@ -24,6 +24,18 @@ typedef int tid_t;
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
 
+struct open_file{
+   int fd;
+   struct file* ptr;
+   struct list_elem elem;
+};
+
+struct child_process{
+   int pid;
+   struct thread* t;
+   struct list_elem elem;
+};
+
 /* A kernel thread or user process.
 
    Each thread structure is stored in its own 4 kB page.  The
@@ -92,6 +104,21 @@ struct thread
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
+    
+    /* Start pintos part 2. */
+
+    struct list open_file_list;
+    struct list child_processe_list;
+    struct thread* parent_thread;
+    bool child_creation_success;
+    int child_status;
+    int waiting_on;
+    struct file* executable_file;
+    struct semaphore wait_child_sema;
+    struct semaphore parent_child_sync_sema;
+    int fd_last;
+
+    /* End pintos part 2. */
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
