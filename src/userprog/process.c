@@ -49,8 +49,6 @@ process_execute (const char *file_name)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE); // it check for null parameter in string.s 
 
-  sema_down(&thread_current()->parent_child_sync_sema);
-
   /* Extract the exec_name from the file name */ 
   name = malloc(strlen(file_name)+1 ) ; 
   strlcpy(name , file_name , strlen(file_name)+ 1 ) ; 
@@ -60,6 +58,9 @@ process_execute (const char *file_name)
 
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (name, PRI_DEFAULT, start_process, fn_copy);
+
+  sema_down(&thread_current()->parent_child_sync_sema);
+
   free(name) ; 
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
