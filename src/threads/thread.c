@@ -283,6 +283,10 @@ thread_exit (void)
   ASSERT (!intr_context ());
 
 #ifdef USERPROG
+  if (thread_current()->parent_thread->waiting_on == thread_current()->tid) 
+  {
+    sema_up(&thread_current()->parent_thread->wait_child_sema);
+  } 
   process_exit ();
 #endif
 
@@ -463,6 +467,16 @@ init_thread (struct thread *t, const char *name, int priority)
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
   t->magic = THREAD_MAGIC;
+
+  sema_init(&t->parent_child_sync_sema,0);
+  sema_init(&t->wait_child_sema,0);
+  list_init(&t->open_file_list);
+  list_init(&t->child_processe_list);
+
+  #ifdef USERPROG
+    if (THREAD_RUNNING == running_thread())
+      t->parent_thread = thread_current();
+  #endif
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);

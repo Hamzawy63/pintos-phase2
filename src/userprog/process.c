@@ -20,15 +20,26 @@
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
+void get_stack_args(char *file_name, void **esp, char **save_ptr);
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
    thread id, or TID_ERROR if the thread cannot be created. */
+
+
+
+   /*
+   name = malloc(strlen(file_name)+1);
+    strlcpy (name, file_name, strlen(file_name)+1);
+    name = strtok_r (name," ",&save_ptr);
+   */
 tid_t
 process_execute (const char *file_name) 
 {
   char *fn_copy;
+  char *name ; 
+  char* next ; 
   tid_t tid;
 
   /* Make a copy of FILE_NAME.
@@ -36,10 +47,20 @@ process_execute (const char *file_name)
   fn_copy = palloc_get_page (0);
   if (fn_copy == NULL)
     return TID_ERROR;
-  strlcpy (fn_copy, file_name, PGSIZE);
+  strlcpy (fn_copy, file_name, PGSIZE); // it check for null parameter in string.s 
+
+  sema_down(&thread_current()->parent_child_sync_sema);
+
+  /* Extract the exec_name from the file name */ 
+  name = malloc(strlen(file_name)+1 ) ; 
+  strlcpy(name , file_name , strlen(file_name)+ 1 ) ; 
+  name = strtok_r(name , " " , &next ) ; 
+
+  
 
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create (name, PRI_DEFAULT, start_process, fn_copy);
+  free(name) ; 
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
   return tid;
@@ -60,6 +81,17 @@ start_process (void *file_name_)
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
+
+  if (success) 
+  {
+    struct thread* parent = thread_current()->parent_thread;
+    parent->child_creation_success = true;
+    struct child_process* child; child->pid = thread_current()->tid;
+    child->t = thread_current();
+    list_push_back(&parent->child_processe_list,&child->elem);
+    sema_up(&parent->parent_child_sync_sema);
+    sema_down(&thread_current()->parent_child_sync_sema);
+  }
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
@@ -88,7 +120,25 @@ start_process (void *file_name_)
 int
 process_wait (tid_t child_tid UNUSED) 
 {
-  return -1;
+  struct thread* t = thread_current();
+  t->waiting_on = child_tid;
+  struct thread* child = NULL;
+  for (struct list_elem* e = list_begin (&t->child_processe_list); e != list_end (&t->child_processe_list);
+  e = list_next (e))
+  {
+    struct child_process* child_process = list_entry (e, struct child_process, elem);
+    if (child_process->pid == child_tid)
+    {
+      child = child_process->t;
+      break;
+    }
+  }
+  if(child != NULL){
+      list_remove(&child->elem);
+      sema_up(&child->parent_child_sync_sema);
+      sema_down(&t->wait_child_sema);
+      return t->child_status;
+  }
 }
 
 /* Free the current process's resources. */
@@ -205,6 +255,15 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
    Stores the executable's entry point into *EIP
    and its initial stack pointer into *ESP.
    Returns true if successful, false otherwise. */
+
+   /*
+    5ra from the internet
+     int name_length = strlen (file_name)+1;
+    fn_copy = malloc (name_length);
+    strlcpy(fn_copy, file_name, name_length);
+    fn_copy = strtok_r (fn_copy, " ", &save_ptr);
+
+   */
 bool
 load (const char *file_name, void (**eip) (void), void **esp) 
 {
@@ -221,8 +280,16 @@ load (const char *file_name, void (**eip) (void), void **esp)
     goto done;
   process_activate ();
 
+  /*Make a copy of the raw file name */
+  int len = strlen(file_name) + 1 ;
+  char *fn_copy = malloc(len) ; 
+  strlcpy(fn_copy , file_name , len) ;    
   /* Open executable file. */
-  file = filesys_open (file_name);
+
+  char *next_token_address ; //will be used again when pushing the argument in the stack 
+  char * token  = strtok_r(file_name , " " , &next_token_address) ; 
+
+  file = filesys_open (token);
   if (file == NULL) 
     {
       printf ("load: %s: open failed\n", file_name);
@@ -304,6 +371,10 @@ load (const char *file_name, void (**eip) (void), void **esp)
   /* Set up stack. */
   if (!setup_stack (esp))
     goto done;
+
+  get_stack_args (fn_copy, esp, &next_token_address);
+  free(fn_copy); // deallocate the fucntion copy   
+
 
   /* Start address. */
   *eip = (void (*) (void)) ehdr.e_entry;
@@ -462,4 +533,71 @@ install_page (void *upage, void *kpage, bool writable)
      address, then map our page there. */
   return (pagedir_get_page (t->pagedir, upage) == NULL
           && pagedir_set_page (t->pagedir, upage, kpage, writable));
+}
+
+void get_stack_args(char *file_name, void **esp, char **save_ptr)
+{
+
+    char *token = file_name;
+    void *stack_pointer = *esp;
+    int argc = 0;
+    int total_length = 0;
+    /*split and insert in the stack
+     * /bin/ls -l foo bar
+     * /bin/ls
+     * -l
+     * foo
+     * bar*/
+    while (token != NULL)
+    {
+        int arg_length = (strlen(token) + 1);
+        total_length += arg_length;
+        stack_pointer -= arg_length;
+        memcpy(stack_pointer, token, arg_length);
+        argc++;
+        token = strtok_r(NULL, " ", save_ptr);
+    }
+
+    char *args_pointer = (char *) stack_pointer;
+
+    /*adding word align*/
+    int  word_align = 0;
+    while (total_length % 4 != 0)
+    {
+        word_align++;
+        total_length++;
+    }
+    if (word_align != 0)
+    {
+        stack_pointer -= word_align;
+        memset(stack_pointer, 0, word_align);
+    }
+
+    /*adding null char*/
+    stack_pointer -= sizeof(char *);
+    memset(stack_pointer, 0, 1);
+
+    /*adding argument address*/
+    int args_pushed = 0;
+    while(argc > args_pushed)
+    {
+        stack_pointer -= sizeof(char *);
+        *((char **) stack_pointer) = args_pointer;
+        args_pushed++;
+        args_pointer += (strlen(args_pointer) + 1);
+    }
+
+    /*adding char** */
+    char ** first_fetch = (char **) stack_pointer;
+    stack_pointer -= sizeof(char **);
+    *((char ***) stack_pointer) = first_fetch;
+
+    /*adding number of arrguments*/
+    stack_pointer -= sizeof(int);
+    *(int *) (stack_pointer) = argc;
+
+    /*adding return address*/
+    stack_pointer -= sizeof(int*);
+    *(int *) (stack_pointer) = 0;
+    *esp = stack_pointer;
 }
