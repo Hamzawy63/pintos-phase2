@@ -10,7 +10,7 @@ static struct lock files_sys_lock;               /* lock for syschronization bet
 
 static void syscall_handler (struct intr_frame *);
 
-struct file* get_file(int fd);
+struct open_file* get_file(int fd);
 
 void exit_wrapper(struct intr_frame *f);
 void exec_wrapper(struct intr_frame *f);
@@ -246,7 +246,7 @@ int
 sys_filesize(int fd)
 {
   struct thread* t = thread_current();
-  struct file* my_file = get_file(fd);
+  struct file* my_file = get_file(fd)->ptr;
 
   if (my_file == NULL)
   {
@@ -283,7 +283,7 @@ sys_read(int fd,void* buffer, int size)
   } else {
 
     struct thread* t = thread_current();
-    struct file* my_file = get_file(fd);
+    struct file* my_file = get_file(fd)->ptr;
 
     if (my_file == NULL)
     {
@@ -331,7 +331,7 @@ sys_write(int fd, void* buffer, int size)
   } else {
     
     struct thread* t = thread_current();
-    struct file* my_file = get_file(fd);
+    struct file* my_file = get_file(fd)->ptr;
 
     if (my_file == NULL)
     {
@@ -369,7 +369,7 @@ void
 sys_seek(int fd, unsigned pos)
 {
   struct thread* t = thread_current();
-  struct file* my_file = get_file(fd);
+  struct file* my_file = get_file(fd)->ptr;
 
   if (my_file == NULL)
   {
@@ -399,7 +399,7 @@ unsigned
 sys_tell(int fd)
 { 
   struct thread* t = thread_current();
-  struct file* my_file = get_file(fd);
+  struct file* my_file = get_file(fd)->ptr;
 
   if (my_file == NULL)
   {
@@ -426,7 +426,7 @@ void
 sys_close(int fd)
 {
   struct thread* t = thread_current();
-  struct file* my_file = get_file(fd);
+  struct open_file* my_file = get_file(fd);
 
   if (my_file == NULL)
   {
@@ -434,8 +434,10 @@ sys_close(int fd)
   }
 
   lock_acquire(&files_sys_lock);
-  file_close(my_file);
+  file_close(my_file->ptr);
   lock_release(&files_sys_lock);
+  list_remove(&my_file->elem);
+  palloc_free_page(my_file);
 }
 
 void
@@ -446,7 +448,7 @@ close_wrapper(struct intr_frame *f)
   sys_close(fd);
 }
 
-struct file* get_file(int fd){
+struct open_file* get_file(int fd){
     struct thread* t = thread_current();
     struct file* my_file = NULL;
     for (struct list_elem* e = list_begin (&t->open_file_list); e != list_end (&t->open_file_list);
@@ -455,7 +457,7 @@ struct file* get_file(int fd){
       struct open_file* opened_file = list_entry (e, struct open_file, elem);
       if (opened_file->fd == fd)
       {
-        return opened_file->ptr;
+        return opened_file;
       }
     }
     return NULL;

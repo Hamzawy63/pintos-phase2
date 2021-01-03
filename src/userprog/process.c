@@ -403,12 +403,12 @@ load (const char *file_name, void (**eip) (void), void **esp)
   *eip = (void (*) (void)) ehdr.e_entry;
  
   success = true;
- 
+  
+  file_deny_write(file);
+   file_close (file);
+
  done:
   /* We arrive here whether the load is successful or not. */
- 
-   file_deny_write(file);
-   file_close (file);
   
  // printf("done loading!!\n");
   return success;
