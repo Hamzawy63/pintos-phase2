@@ -42,7 +42,6 @@ syscall_handler (struct intr_frame *f UNUSED)
   switch (get_int(esp))
   {
   case SYS_HALT:
-    printf("(halt) begin\n");
     halt_wrapper(esp);
     break;
   
@@ -113,6 +112,7 @@ get_int(int** esp)
 char* 
 get_char_ptr(char*** esp) 
 {
+  validate_void_ptr(*esp);
   validate_void_ptr(**esp);
   char* res = **esp;
   (*esp)++;
@@ -122,6 +122,7 @@ get_char_ptr(char*** esp)
 void* 
 get_void_ptr(void*** esp)
 {
+  validate_void_ptr(*esp);
   validate_void_ptr(**esp);
   void* res = **esp;
   (*esp)++;
@@ -131,38 +132,41 @@ get_void_ptr(void*** esp)
 void 
 validate_void_ptr(const void* pt)
 {
-  if (pt == NULL || !is_user_vaddr(pt) || !pagedir_get_page(thread_current()->pagedir, pt)) 
+  if (pt == NULL || !is_user_vaddr(pt) || pagedir_get_page(thread_current()->pagedir, pt) == NULL) 
   {
-    exit(-1);
+    sys_exit(-1);
   }
 }
 
 void
-halt()
+sys_halt()
 {
   shutdown_power_off();
 }
 
 void
 halt_wrapper(void* esp)
-{
-  halt();
+{ 
+  sys_halt();
 }
 
 void
-exit(int status)
+sys_exit(int status)
 {
+  struct thread* parent = thread_current()->parent_thread;
+  printf("%s: exit(%d)\n", thread_current()->name, status);
+  if(parent) parent->child_status = status;
   thread_exit();
 }
 
 void
 exit_wrapper(void* esp)
 {
-  exit(get_int(esp));
+  sys_exit(get_int(esp));
 }
 
 int
-exec(char* file_name)
+sys_exec(char* file_name)
 {
   return process_execute(file_name);
 }
@@ -171,11 +175,11 @@ int
 exec_wrapper(void* esp)
 { 
   char* file_name = get_char_ptr(esp);
-  return exec(file_name);
+  return sys_exec(file_name);
 }
 
 int
-wait(int pid)
+sys_wait(int pid)
 {
   return process_wait(pid);
 }
@@ -183,11 +187,11 @@ wait(int pid)
 int
 wait_wrapper(void* esp)
 {
-  return wait(get_int(esp));
+  return sys_wait(get_int(esp));
 }
 
 void
-create()
+sys_create()
 {
 
 }
@@ -195,11 +199,11 @@ create()
 void
 create_wrapper(void* esp)
 {
-  char* file_name = get_char_ptr(esp);
+  
 }
 
 void
-remove()
+sys_remove()
 {
 
 }
@@ -211,9 +215,9 @@ remove_wrapper(void* esp)
 }
 
 void
-open()
+ssys_open()
 {
-  exit(-1);
+  
 }
 
 void
@@ -223,7 +227,7 @@ open_wrapper(void* esp)
 }
 
 void
-filesize()
+sys_filesize()
 {
 
 }
@@ -235,7 +239,7 @@ filesize_wrapper(void* esp)
 }
 
 void
-read()
+sys_read()
 {
 
 }
@@ -247,7 +251,7 @@ read_wrapper(void* esp)
 }
 
 void
-write()
+sys_write()
 {
 
 }
@@ -259,7 +263,7 @@ write_wrapper(void* esp)
 }
 
 void
-seek()
+sys_seek()
 {
 
 }
@@ -271,7 +275,7 @@ seek_wrapper(void* esp)
 }
 
 void
-tell()
+sys_tell()
 {
 
 }
@@ -283,7 +287,7 @@ tell_wrapper(void* esp)
 }
 
 void
-close()
+sys_close()
 {
 
 }

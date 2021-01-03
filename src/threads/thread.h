@@ -4,7 +4,8 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
-#include <threads/synch.h>
+#include "threads/synch.h"
+#include "filesys/file.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -28,12 +29,6 @@ typedef int tid_t;
 struct open_file{
    int fd;
    struct file* ptr;
-   struct list_elem elem;
-};
-
-struct child_process{
-   int pid;
-   struct thread* t;
    struct list_elem elem;
 };
 
@@ -108,16 +103,17 @@ struct thread
     
     /* Start pintos part 2. */
 
-    struct list open_file_list;
-    struct list child_processe_list;
-    struct thread* parent_thread;
-    bool child_creation_success;
+    struct list open_file_list;          // list of opened files
+    struct list child_processe_list;	 // list of child of the process
+    struct thread* parent_thread;        // parent of the process
+    bool is_child_creation_success;
     int child_status;
-    int waiting_on;
+    tid_t waiting_on;
     struct file* executable_file;
     struct semaphore wait_child_sema;
     struct semaphore parent_child_sync_sema;
     int fd_last;
+    struct list_elem child_elem;
 
     /* End pintos part 2. */
 

@@ -39,21 +39,22 @@ process_execute (const char *file_name)
 {
   char *fn_copy;
   char *name ; 
-  char* next ; 
+  char* next ;
   tid_t tid;
 
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
   fn_copy = palloc_get_page (0);
-  if (fn_copy == NULL)
+
+  name = palloc_get_page (0);   // allocate page for the file name
+
+  if (fn_copy == NULL || name == NULL)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE); // it check for null parameter in string.s 
 
   /* Extract the exec_name from the file name */ 
-  name = malloc(strlen(file_name)+1 ) ; 
-  strlcpy(name , file_name , strlen(file_name)+ 1 ) ; 
+  strlcpy(name , file_name , PGSIZE) ; 
   name = strtok_r(name , " " , &next ) ; 
-
   
 
   /* Create a new thread to execute FILE_NAME. */
@@ -61,9 +62,17 @@ process_execute (const char *file_name)
 
   sema_down(&thread_current()->parent_child_sync_sema);
 
-  free(name) ; 
   if (tid == TID_ERROR)
-    palloc_free_page (fn_copy); 
+  {
+  	palloc_free_page (fn_copy);
+  	palloc_free_page (name);
+  }
+
+  if (!thread_current()->is_child_creation_success) 
+  {
+    return TID_ERROR;
+  }
+     
   return tid;
 }
 
@@ -85,13 +94,12 @@ start_process (void *file_name_)
 
   if (success) 
   {
-    struct thread* parent = thread_current()->parent_thread;
-    parent->child_creation_success = true;
-    struct child_process* child; child->pid = thread_current()->tid;
-    child->t = thread_current();
-    list_push_back(&parent->child_processe_list,&child->elem);
+    struct thread* child = thread_current();
+    struct thread* parent = child->parent_thread;
+    parent->is_child_creation_success = true;
+    list_push_back(&parent->child_processe_list,&child->child_elem);
     sema_up(&parent->parent_child_sync_sema);
-    sema_down(&thread_current()->parent_child_sync_sema);
+    sema_down(&child->parent_child_sync_sema);
   }
 
   /* If load failed, quit. */
@@ -119,27 +127,28 @@ start_process (void *file_name_)
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
 int
-process_wait (tid_t child_tid UNUSED) 
+process_wait (tid_t child_tid) 
 {
-  struct thread* t = thread_current();
-  t->waiting_on = child_tid;
+  struct thread* parent = thread_current();
+  parent->waiting_on = child_tid;
   struct thread* child = NULL;
-  for (struct list_elem* e = list_begin (&t->child_processe_list); e != list_end (&t->child_processe_list);
+  for (struct list_elem* e = list_begin (&parent->child_processe_list); e != list_end (&parent->child_processe_list);
   e = list_next (e))
   {
-    struct child_process* child_process = list_entry (e, struct child_process, elem);
-    if (child_process->pid == child_tid)
+    struct thread* child_process = list_entry (e, struct thread, child_elem);
+    if (child_process->tid == child_tid)
     {
-      child = child_process->t;
+      child = child_process;
       break;
     }
   }
   if(child != NULL){
-      list_remove(&child->elem);
-      sema_up(&child->parent_child_sync_sema);
-      sema_down(&t->wait_child_sema);
-      return t->child_status;
+    list_remove(&child->child_elem);
+    sema_up(&child->parent_child_sync_sema);
+    sema_down(&parent->wait_child_sema);
+    return parent->child_status;
   }
+  return -1;
 }
 
 /* Free the current process's resources. */
@@ -148,6 +157,11 @@ process_exit (void)
 {
   struct thread *cur = thread_current ();
   uint32_t *pd;
+
+  if (cur->parent_thread != NULL && cur->parent_thread->waiting_on == cur->tid)
+  {
+    sema_up(&cur->parent_thread->wait_child_sema);
+  }
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
@@ -268,35 +282,43 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
 bool
 load (const char *file_name, void (**eip) (void), void **esp) 
 {
+  // if(!valid(esp)){
+  //   printf("very bad \n");
+  //   return 0;
+  //   //exit(-1);
+    
+  // }
+ 
   struct thread *t = thread_current ();
   struct Elf32_Ehdr ehdr;
   struct file *file = NULL;
   off_t file_ofs;
   bool success = false;
+    char *fn_copy;
+    char *save_ptr;
+ 
+    int name_length = strlen (file_name)+1;
+    fn_copy = malloc (name_length);
+    strlcpy(fn_copy, file_name, name_length);
+    fn_copy = strtok_r (fn_copy, " ", &save_ptr);
+ // char* excutable_file = strtok_r(file_name," ",&saveptr1);
+ 
   int i;
-
+ 
   /* Allocate and activate page directory. */
   t->pagedir = pagedir_create ();
+ 
   if (t->pagedir == NULL) 
     goto done;
   process_activate ();
-
-  /*Make a copy of the raw file name */
-  int len = strlen(file_name) + 1 ;
-  char *fn_copy = malloc(len) ; 
-  strlcpy(fn_copy , file_name , len) ;    
-  /* Open executable file. */
-
-  char *next_token_address ; //will be used again when pushing the argument in the stack 
-  char * token  = strtok_r(file_name , " " , &next_token_address) ; 
-
-  file = filesys_open (token);
+ 
+  file = filesys_open (fn_copy);
   if (file == NULL) 
     {
       printf ("load: %s: open failed\n", file_name);
       goto done; 
     }
-
+ 
   /* Read and verify executable header. */
   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
       || memcmp (ehdr.e_ident, "\177ELF\1\1\1", 7)
@@ -309,17 +331,16 @@ load (const char *file_name, void (**eip) (void), void **esp)
       printf ("load: %s: error loading executable\n", file_name);
       goto done; 
     }
-
   /* Read program headers. */
   file_ofs = ehdr.e_phoff;
   for (i = 0; i < ehdr.e_phnum; i++) 
     {
       struct Elf32_Phdr phdr;
-
+ 
       if (file_ofs < 0 || file_ofs > file_length (file))
         goto done;
       file_seek (file, file_ofs);
-
+ 
       if (file_read (file, &phdr, sizeof phdr) != sizeof phdr)
         goto done;
       file_ofs += sizeof phdr;
@@ -368,23 +389,28 @@ load (const char *file_name, void (**eip) (void), void **esp)
           break;
         }
     }
-
+ 
   /* Set up stack. */
+ 
   if (!setup_stack (esp))
     goto done;
-
-  get_stack_args (fn_copy, esp, &next_token_address);
-  free(fn_copy); // deallocate the fucntion copy   
-
-
+ 
+    get_stack_args(fn_copy, esp, &save_ptr);
+    //palloc_free_page (fn_copy);
+    free(fn_copy);
+ 
   /* Start address. */
   *eip = (void (*) (void)) ehdr.e_entry;
-
+ 
   success = true;
-
+ 
  done:
   /* We arrive here whether the load is successful or not. */
-  file_close (file);
+ 
+   file_deny_write(file);
+   file_close (file);
+  
+ // printf("done loading!!\n");
   return success;
 }
 
@@ -538,7 +564,7 @@ install_page (void *upage, void *kpage, bool writable)
 
 void get_stack_args(char *file_name, void **esp, char **save_ptr)
 {
-
+ 
     char *token = file_name;
     void *stack_pointer = *esp;
     int argc = 0;
@@ -558,9 +584,9 @@ void get_stack_args(char *file_name, void **esp, char **save_ptr)
         argc++;
         token = strtok_r(NULL, " ", save_ptr);
     }
-
+    
     char *args_pointer = (char *) stack_pointer;
-
+ 
     /*adding word align*/
     int  word_align = 0;
     while (total_length % 4 != 0)
@@ -573,11 +599,11 @@ void get_stack_args(char *file_name, void **esp, char **save_ptr)
         stack_pointer -= word_align;
         memset(stack_pointer, 0, word_align);
     }
-
+ 
     /*adding null char*/
     stack_pointer -= sizeof(char *);
     memset(stack_pointer, 0, 1);
-
+ 
     /*adding argument address*/
     int args_pushed = 0;
     while(argc > args_pushed)
@@ -587,16 +613,16 @@ void get_stack_args(char *file_name, void **esp, char **save_ptr)
         args_pushed++;
         args_pointer += (strlen(args_pointer) + 1);
     }
-
+ 
     /*adding char** */
     char ** first_fetch = (char **) stack_pointer;
     stack_pointer -= sizeof(char **);
     *((char ***) stack_pointer) = first_fetch;
-
+ 
     /*adding number of arrguments*/
     stack_pointer -= sizeof(int);
     *(int *) (stack_pointer) = argc;
-
+ 
     /*adding return address*/
     stack_pointer -= sizeof(int*);
     *(int *) (stack_pointer) = 0;
