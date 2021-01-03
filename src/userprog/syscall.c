@@ -14,12 +14,12 @@ void halt_wrapper(void* esp);
 void exit_wrapper(void* esp);
 int exec_wrapper(void* esp);
 int wait_wrapper(void* esp);
-void create_wrapper(void* esp);
-void remove_wrapper(void* esp);
-void open_wrapper(void* esp);
+bool create_wrapper(void* esp);
+bool remove_wrapper(void* esp);
+int open_wrapper(void* esp);
 void filesize_wrapper(void* esp);
 void read_wrapper(void* esp);
-void write_wrapper(void* esp);
+int write_wrapper(void* esp);
 void seek_wrapper(void* esp);
 void tell_wrapper(void* esp);
 void close_wrapper(void* esp);
@@ -37,60 +37,60 @@ static void
 syscall_handler (struct intr_frame *f UNUSED) 
 {
 
-  void* esp = &f->esp;
-
-  switch (get_int(esp))
+  void* esp = f->esp;
+  
+  switch (get_int(&esp))
   {
   case SYS_HALT:
-    halt_wrapper(esp);
+    halt_wrapper(&esp);
     break;
   
   case SYS_EXIT:
-    exit_wrapper(esp);
+    exit_wrapper(&esp);
     break;
 
   case SYS_EXEC:
-    f->eax = exec_wrapper(esp);
+    f->eax = exec_wrapper(&esp);
     break;
 
   case SYS_WAIT:
-    f->eax = wait_wrapper(esp);
+    f->eax = wait_wrapper(&esp);
     break;
 
   case SYS_CREATE:
-    create_wrapper(esp);
+    f->eax = create_wrapper(&esp);
     break;
 
   case SYS_REMOVE:
-    remove_wrapper(esp);
+    f->eax = remove_wrapper(&esp);
     break;
 
   case SYS_OPEN:
-    open_wrapper(esp);
+    f->eax = open_wrapper(&esp);
     break;
 
   case SYS_FILESIZE:
-    filesize_wrapper(esp);
+    filesize_wrapper(&esp);
     break;
 
   case SYS_READ:
-    read_wrapper(esp);
+    read_wrapper(&esp);
     break;
 
   case SYS_WRITE:
-    write_wrapper(esp);
+    f->eax = write_wrapper(&esp);
     break;
 
   case SYS_SEEK:
-    seek_wrapper(esp);
+    seek_wrapper(&esp);
     break;
 
   case SYS_TELL:
-    tell_wrapper(esp);
+    tell_wrapper(&esp);
     break;
 
   case SYS_CLOSE:
-    close_wrapper(esp);
+    close_wrapper(&esp);
     break;
 
   default:
@@ -105,8 +105,8 @@ get_int(int** esp)
 {
   validate_void_ptr(*esp);
   int res = **esp;
-  (*esp)++;
-  return res;
+  (*esp)+=4;
+  return **esp;
 }
 
 char* 
@@ -115,7 +115,7 @@ get_char_ptr(char*** esp)
   validate_void_ptr(*esp);
   validate_void_ptr(**esp);
   char* res = **esp;
-  (*esp)++;
+  (*esp)+=4;
   return res;
 }
 
@@ -125,7 +125,7 @@ get_void_ptr(void*** esp)
   validate_void_ptr(*esp);
   validate_void_ptr(**esp);
   void* res = **esp;
-  (*esp)++;
+  (*esp)+=4;
   return res;
 }
 
@@ -190,40 +190,74 @@ wait_wrapper(void* esp)
   return sys_wait(get_int(esp));
 }
 
-void
-sys_create()
+bool
+sys_create(char* name, size_t size)
 {
+  bool res;
+  lock_acquire(&files_sys_lock);
 
+  res = filesys_create(name,size);
+
+  lock_release(&files_sys_lock);
+  return res;
 }
 
-void
+bool
 create_wrapper(void* esp)
 {
-  
+  char* name = get_char_ptr(esp);
+  size_t size = get_int(esp);
+
+  return sys_create(name,size);
 }
 
-void
-sys_remove()
+bool
+sys_remove(char* name)
 {
+  bool res;
+  lock_acquire(&files_sys_lock);
 
+  res = filesys_remove(name);
+
+  lock_release(&files_sys_lock);
+  return res;
 }
 
-void
+bool
 remove_wrapper(void* esp)
 {
-  
+  char* name = get_char_ptr(esp);
+
+  return sys_remove;
 }
 
-void
-ssys_open()
+int
+sys_open(char* name)
 {
-  
+  struct open_file* open = palloc_get_page(0);
+  if (open == NULL) 
+  {
+    palloc_free_page(open);
+    return -1;
+  }
+  lock_acquire(&files_sys_lock);
+  open->ptr = filesys_open(name);
+  lock_release(&files_sys_lock);
+  if (open->ptr == NULL)
+  {
+    return -1;
+  }
+  open->fd = thread_current()->fd_last++;
+  list_push_back(&thread_current()->open_file_list,&open->elem);
+  return open->fd;
 }
 
-void
+int
 open_wrapper(void* esp)
 {
-  
+  char* name = get_char_ptr(esp);
+
+  return sys_open(name);
 }
 
 void
@@ -250,16 +284,56 @@ read_wrapper(void* esp)
   
 }
 
-void
-sys_write()
+int
+sys_write(int fd, void* buffer, int size)
 {
+
+  if (fd == 1)
+  {
+    
+    lock_acquire(&files_sys_lock);
+    putbuf(buffer,size);
+    lock_release(&files_sys_lock);
+    return size;
+
+  } else {
+    
+    struct thread* t = thread_current();
+    struct file* my_file = NULL;
+    for (struct list_elem* e = list_begin (&t->open_file_list); e != list_end (&t->open_file_list);
+    e = list_next (e))
+    {
+      struct open_file* opened_file = list_entry (e, struct open_file, elem);
+      if (opened_file->fd == fd)
+      {
+        my_file = opened_file->ptr;
+        break;
+      }
+    }
+
+    if (my_file == NULL)
+    {
+      return -1;
+    }
+    int res;
+    lock_acquire(&files_sys_lock);
+    res = file_write(my_file,buffer,size);
+    lock_release(&files_sys_lock);
+    return res;
+  }
 
 }
 
-void
+int
 write_wrapper(void* esp)
 {
+  int fd, size;
+  void* buffer;
+  fd = get_int(esp);
+  size = get_int(esp);
+  buffer = get_void_ptr(esp);
   
+  return sys_write(fd,buffer,size);
 }
 
 void
