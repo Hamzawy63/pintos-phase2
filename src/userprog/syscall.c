@@ -10,19 +10,20 @@ static struct lock files_sys_lock;               /* lock for syschronization bet
 
 static void syscall_handler (struct intr_frame *);
 
-void halt_wrapper(void* esp);
-void exit_wrapper(void* esp);
-int exec_wrapper(void* esp);
-int wait_wrapper(void* esp);
-bool create_wrapper(void* esp);
-bool remove_wrapper(void* esp);
-int open_wrapper(void* esp);
-void filesize_wrapper(void* esp);
-void read_wrapper(void* esp);
-int write_wrapper(void* esp);
-void seek_wrapper(void* esp);
-void tell_wrapper(void* esp);
-void close_wrapper(void* esp);
+struct file* get_file(int fd);
+
+void exit_wrapper(struct intr_frame *f);
+void exec_wrapper(struct intr_frame *f);
+void wait_wrapper(struct intr_frame *f);
+void create_wrapper(struct intr_frame *f);
+void remove_wrapper(struct intr_frame *f);
+void open_wrapper(struct intr_frame *f);
+void filesize_wrapper(struct intr_frame *f);
+void read_wrapper(struct intr_frame *f);
+void write_wrapper(struct intr_frame *f);
+void seek_wrapper(struct intr_frame *f);
+void tell_wrapper(struct intr_frame *f);
+void close_wrapper(struct intr_frame *f);
 
 
 void
@@ -34,63 +35,62 @@ syscall_init (void)
 }
 
 static void
-syscall_handler (struct intr_frame *f UNUSED) 
-{
+syscall_handler (struct intr_frame *f) 
+{ 
+  validate_void_ptr(f->esp);
 
-  void* esp = f->esp;
-  
-  switch (get_int(&esp))
+  switch (*(int*)f->esp)
   {
   case SYS_HALT:
-    halt_wrapper(&esp);
+    shutdown_power_off();
     break;
   
   case SYS_EXIT:
-    exit_wrapper(&esp);
+    exit_wrapper(f);
     break;
 
   case SYS_EXEC:
-    f->eax = exec_wrapper(&esp);
+    exec_wrapper(f);
     break;
 
   case SYS_WAIT:
-    f->eax = wait_wrapper(&esp);
+    wait_wrapper(f);
     break;
 
   case SYS_CREATE:
-    f->eax = create_wrapper(&esp);
+    create_wrapper(f);
     break;
 
   case SYS_REMOVE:
-    f->eax = remove_wrapper(&esp);
+    remove_wrapper(f);
     break;
 
   case SYS_OPEN:
-    f->eax = open_wrapper(&esp);
+    open_wrapper(f);
     break;
 
   case SYS_FILESIZE:
-    filesize_wrapper(&esp);
+    filesize_wrapper(f);
     break;
 
   case SYS_READ:
-    read_wrapper(&esp);
+    read_wrapper(f);
     break;
 
   case SYS_WRITE:
-    f->eax = write_wrapper(&esp);
+    write_wrapper(f);
     break;
 
   case SYS_SEEK:
-    seek_wrapper(&esp);
+    seek_wrapper(f);
     break;
 
   case SYS_TELL:
-    tell_wrapper(&esp);
+    tell_wrapper(f);
     break;
 
   case SYS_CLOSE:
-    close_wrapper(&esp);
+    close_wrapper(f);
     break;
 
   default:
@@ -98,35 +98,6 @@ syscall_handler (struct intr_frame *f UNUSED)
     break;
   }
 
-}
-
-int 
-get_int(int** esp)
-{
-  validate_void_ptr(*esp);
-  int res = **esp;
-  (*esp)+=4;
-  return **esp;
-}
-
-char* 
-get_char_ptr(char*** esp) 
-{
-  validate_void_ptr(*esp);
-  validate_void_ptr(**esp);
-  char* res = **esp;
-  (*esp)+=4;
-  return res;
-}
-
-void* 
-get_void_ptr(void*** esp)
-{
-  validate_void_ptr(*esp);
-  validate_void_ptr(**esp);
-  void* res = **esp;
-  (*esp)+=4;
-  return res;
 }
 
 void 
@@ -139,18 +110,6 @@ validate_void_ptr(const void* pt)
 }
 
 void
-sys_halt()
-{
-  shutdown_power_off();
-}
-
-void
-halt_wrapper(void* esp)
-{ 
-  sys_halt();
-}
-
-void
 sys_exit(int status)
 {
   struct thread* parent = thread_current()->parent_thread;
@@ -160,9 +119,11 @@ sys_exit(int status)
 }
 
 void
-exit_wrapper(void* esp)
+exit_wrapper(struct intr_frame *f)
 {
-  sys_exit(get_int(esp));
+  validate_void_ptr(f->esp+4);
+  int status = *((int*)f->esp + 1);
+  sys_exit(status);
 }
 
 int
@@ -171,11 +132,15 @@ sys_exec(char* file_name)
   return process_execute(file_name);
 }
 
-int
-exec_wrapper(void* esp)
+void
+exec_wrapper(struct intr_frame *f)
 { 
-  char* file_name = get_char_ptr(esp);
-  return sys_exec(file_name);
+  validate_void_ptr(f->esp+4);
+  char* name = (char*)(*((int*)f->esp + 1));
+
+  if (name == NULL) sys_exit(-1);
+
+  f->eax = sys_exec(name);
 }
 
 int
@@ -184,10 +149,13 @@ sys_wait(int pid)
   return process_wait(pid);
 }
 
-int
-wait_wrapper(void* esp)
+void
+wait_wrapper(struct intr_frame *f)
 {
-  return sys_wait(get_int(esp));
+  validate_void_ptr(f->esp+4);
+  int tid = *((int*)f->esp + 1);
+
+  f->eax = sys_wait(tid);
 }
 
 bool
@@ -202,13 +170,18 @@ sys_create(char* name, size_t size)
   return res;
 }
 
-bool
-create_wrapper(void* esp)
+void
+create_wrapper(struct intr_frame *f)
 {
-  char* name = get_char_ptr(esp);
-  size_t size = get_int(esp);
+  validate_void_ptr(f->esp + 4);
+  validate_void_ptr(f->esp + 8);
 
-  return sys_create(name,size);
+  char* name = (char*)(*((int*)f->esp + 1));
+  size_t size = *((int*)f->esp + 2);
+
+  if (name == NULL) sys_exit(-1);
+
+  f->eax = sys_create(name,size);
 }
 
 bool
@@ -223,12 +196,17 @@ sys_remove(char* name)
   return res;
 }
 
-bool
-remove_wrapper(void* esp)
+void
+remove_wrapper(struct intr_frame *f)
 {
-  char* name = get_char_ptr(esp);
 
-  return sys_remove;
+  validate_void_ptr(f->esp + 4);
+
+  char* name = (char*)(*((int*)f->esp + 1));
+
+  if (name == NULL) sys_exit(-1);
+
+  f->eax = sys_remove(name);
 }
 
 int
@@ -252,36 +230,90 @@ sys_open(char* name)
   return open->fd;
 }
 
+void
+open_wrapper(struct intr_frame *f)
+{
+  validate_void_ptr(f->esp + 4);
+
+  char* name = (char*)(*((int*)f->esp + 1));
+
+  if (name == NULL) sys_exit(-1);
+
+  f->eax = sys_open(name);
+}
+
 int
-open_wrapper(void* esp)
+sys_filesize(int fd)
 {
-  char* name = get_char_ptr(esp);
+  struct thread* t = thread_current();
+  struct file* my_file = get_file(fd);
 
-  return sys_open(name);
+  if (my_file == NULL)
+  {
+    return -1;
+  }
+  int res;
+  lock_acquire(&files_sys_lock);
+  res = file_length(my_file);
+  lock_release(&files_sys_lock);
+  return res;
 }
 
 void
-sys_filesize()
+filesize_wrapper(struct intr_frame *f)
 {
+  validate_void_ptr(f->esp + 4);
+  int fd = *((int*)f->esp + 1);
 
+  f->eax = sys_filesize(fd);
+}
+
+int
+sys_read(int fd,void* buffer, int size)
+{
+  if (fd == 0)
+  {
+    
+    for (size_t i = 0; i < size; i++)
+    {
+      ((char*)buffer)[i] = input_getc();
+    }
+    return size;
+    
+  } else {
+
+    struct thread* t = thread_current();
+    struct file* my_file = get_file(fd);
+
+    if (my_file == NULL)
+    {
+      return -1;
+    }
+    int res;
+    lock_acquire(&files_sys_lock);
+    res = file_read(my_file,buffer,size);
+    lock_release(&files_sys_lock);
+    return res;
+    
+  }
 }
 
 void
-filesize_wrapper(void* esp)
+read_wrapper(struct intr_frame *f)
 {
+  validate_void_ptr(f->esp + 4);
+  validate_void_ptr(f->esp + 8);
+  validate_void_ptr(f->esp + 12);
+
+  int fd, size;
+  void* buffer;
+  fd = *((int*)f->esp + 1);
+  buffer = (void*)(*((int*)f->esp + 2));
+  size = *((int*)f->esp + 3);
+
+  if (buffer == NULL) sys_exit(-1);
   
-}
-
-void
-sys_read()
-{
-
-}
-
-void
-read_wrapper(void* esp)
-{
-  
+  f->eax = sys_read(fd,buffer,size);
 }
 
 int
@@ -299,17 +331,7 @@ sys_write(int fd, void* buffer, int size)
   } else {
     
     struct thread* t = thread_current();
-    struct file* my_file = NULL;
-    for (struct list_elem* e = list_begin (&t->open_file_list); e != list_end (&t->open_file_list);
-    e = list_next (e))
-    {
-      struct open_file* opened_file = list_entry (e, struct open_file, elem);
-      if (opened_file->fd == fd)
-      {
-        my_file = opened_file->ptr;
-        break;
-      }
-    }
+    struct file* my_file = get_file(fd);
 
     if (my_file == NULL)
     {
@@ -324,50 +346,117 @@ sys_write(int fd, void* buffer, int size)
 
 }
 
-int
-write_wrapper(void* esp)
+void
+write_wrapper(struct intr_frame *f)
 {
+
+  validate_void_ptr(f->esp + 4);
+  validate_void_ptr(f->esp + 8);
+  validate_void_ptr(f->esp + 12);
+
   int fd, size;
   void* buffer;
-  fd = get_int(esp);
-  size = get_int(esp);
-  buffer = get_void_ptr(esp);
+  fd = *((int*)f->esp + 1);
+  buffer = (void*)(*((int*)f->esp + 2));
+  size = *((int*)f->esp + 3);
+
+  if (buffer == NULL) sys_exit(-1);
   
-  return sys_write(fd,buffer,size);
+  f->eax = sys_write(fd,buffer,size);
 }
 
 void
-sys_seek()
+sys_seek(int fd, unsigned pos)
 {
+  struct thread* t = thread_current();
+  struct file* my_file = get_file(fd);
 
+  if (my_file == NULL)
+  {
+    return;
+  }
+
+  lock_acquire(&files_sys_lock);
+  file_seek(my_file,pos);
+  lock_release(&files_sys_lock);
 }
 
 void
-seek_wrapper(void* esp)
+seek_wrapper(struct intr_frame *f)
 {
-  
+  validate_void_ptr(f->esp + 4);
+  validate_void_ptr(f->esp + 8);
+
+  int fd;
+  unsigned pos;
+  fd = *((int*)f->esp + 1);
+  pos = *((unsigned*)f->esp + 2);
+
+  sys_seek(fd,pos);
+}
+
+unsigned
+sys_tell(int fd)
+{ 
+  struct thread* t = thread_current();
+  struct file* my_file = get_file(fd);
+
+  if (my_file == NULL)
+  {
+    return -1;
+  }
+
+  unsigned res;
+  lock_acquire(&files_sys_lock);
+  res = file_tell(my_file);
+  lock_release(&files_sys_lock);
+  return res;
 }
 
 void
-sys_tell()
+tell_wrapper(struct intr_frame *f)
 {
+  validate_void_ptr(f->esp + 4);
+  int fd = *((int*)f->esp + 1);
 
+  f->eax = sys_tell(fd);
 }
 
 void
-tell_wrapper(void* esp)
+sys_close(int fd)
 {
-  
+  struct thread* t = thread_current();
+  struct file* my_file = get_file(fd);
+
+  if (my_file == NULL)
+  {
+    return;
+  }
+
+  lock_acquire(&files_sys_lock);
+  file_close(my_file);
+  lock_release(&files_sys_lock);
 }
 
 void
-sys_close()
+close_wrapper(struct intr_frame *f)
 {
-
+  validate_void_ptr(f->esp + 4);
+  int fd = *((int*)f->esp + 1);
+  sys_close(fd);
 }
 
-void
-close_wrapper(void* esp)
-{
-  
+struct file* get_file(int fd){
+    struct thread* t = thread_current();
+    struct file* my_file = NULL;
+    for (struct list_elem* e = list_begin (&t->open_file_list); e != list_end (&t->open_file_list);
+    e = list_next (e))
+    {
+      struct open_file* opened_file = list_entry (e, struct open_file, elem);
+      if (opened_file->fd == fd)
+      {
+        return opened_file->ptr;
+      }
+    }
+    return NULL;
 }
