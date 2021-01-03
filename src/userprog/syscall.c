@@ -139,8 +139,9 @@ exec_wrapper(struct intr_frame *f)
   char* name = (char*)(*((int*)f->esp + 1));
 
   if (name == NULL) sys_exit(-1);
-
+  lock_acquire(&files_sys_lock);
   f->eax = sys_exec(name);
+  lock_release(&files_sys_lock);
 }
 
 int
@@ -276,7 +277,9 @@ sys_read(int fd,void* buffer, int size)
     
     for (size_t i = 0; i < size; i++)
     {
+      lock_acquire(&files_sys_lock);
       ((char*)buffer)[i] = input_getc();
+      lock_release(&files_sys_lock);
     }
     return size;
     
@@ -311,7 +314,7 @@ read_wrapper(struct intr_frame *f)
   buffer = (void*)(*((int*)f->esp + 2));
   size = *((int*)f->esp + 3);
 
-  if (buffer == NULL) sys_exit(-1);
+  validate_void_ptr(buffer + size);
   
   f->eax = sys_read(fd,buffer,size);
 }

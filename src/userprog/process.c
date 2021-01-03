@@ -92,10 +92,11 @@ start_process (void *file_name_)
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
 
+  struct thread* child = thread_current();
+  struct thread* parent = child->parent_thread;
+
   if (success) 
   {
-    struct thread* child = thread_current();
-    struct thread* parent = child->parent_thread;
     parent->is_child_creation_success = true;
     list_push_back(&parent->child_processe_list,&child->child_elem);
     sema_up(&parent->parent_child_sync_sema);
@@ -105,7 +106,10 @@ start_process (void *file_name_)
   /* If load failed, quit. */
   palloc_free_page (file_name);
   if (!success) 
-    thread_exit ();
+  {
+    sema_up(&parent->parent_child_sync_sema);
+    sys_exit(-1);
+  }
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -161,6 +165,27 @@ process_exit (void)
   if (cur->parent_thread != NULL && cur->parent_thread->waiting_on == cur->tid)
   {
     sema_up(&cur->parent_thread->wait_child_sema);
+  }
+
+  while (!list_empty(&cur->open_file_list))
+  {
+    struct open_file* opened_file = list_entry(list_pop_back(&cur->open_file_list), struct open_file, elem);
+    file_close(opened_file->ptr);
+    palloc_free_page(opened_file);
+  }
+  
+
+  for (struct list_elem* e = list_begin (&cur->child_processe_list); e != list_end (&cur->child_processe_list);
+    e = list_next (e))
+    {
+      struct thread* child = list_entry(e, struct thread, child_elem);
+      sema_up(&child->parent_child_sync_sema);
+    }
+  
+  if (cur->executable_file != NULL)
+  {
+    file_allow_write(cur->executable_file);
+    file_close(cur->executable_file);
   }
 
   /* Destroy the current process's page directory and switch back
@@ -282,43 +307,39 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
 bool
 load (const char *file_name, void (**eip) (void), void **esp) 
 {
-  // if(!valid(esp)){
-  //   printf("very bad \n");
-  //   return 0;
-  //   //exit(-1);
-    
-  // }
- 
   struct thread *t = thread_current ();
   struct Elf32_Ehdr ehdr;
   struct file *file = NULL;
   off_t file_ofs;
   bool success = false;
-    char *fn_copy;
-    char *save_ptr;
- 
-    int name_length = strlen (file_name)+1;
-    fn_copy = malloc (name_length);
-    strlcpy(fn_copy, file_name, name_length);
-    fn_copy = strtok_r (fn_copy, " ", &save_ptr);
- // char* excutable_file = strtok_r(file_name," ",&saveptr1);
- 
   int i;
  
   /* Allocate and activate page directory. */
   t->pagedir = pagedir_create ();
- 
   if (t->pagedir == NULL) 
     goto done;
   process_activate ();
- 
-  file = filesys_open (fn_copy);
+
+  char *token, *next;
+  token = palloc_get_page (0);
+  if (token == NULL) {
+    goto done;
+  }
+  strlcpy(token, file_name, PGSIZE);
+  token = strtok_r (token, " ", &next);
+
+  /* Open executable file. */
+  file = filesys_open (token);
   if (file == NULL) 
     {
       printf ("load: %s: open failed\n", file_name);
-      goto done; 
+      success = 0;
+      goto done;
     }
- 
+  
+  t->executable_file = file;
+  file_deny_write(file);
+
   /* Read and verify executable header. */
   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
       || memcmp (ehdr.e_ident, "\177ELF\1\1\1", 7)
@@ -331,6 +352,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
       printf ("load: %s: error loading executable\n", file_name);
       goto done; 
     }
+
   /* Read program headers. */
   file_ofs = ehdr.e_phoff;
   for (i = 0; i < ehdr.e_phnum; i++) 
@@ -391,26 +413,17 @@ load (const char *file_name, void (**eip) (void), void **esp)
     }
  
   /* Set up stack. */
- 
   if (!setup_stack (esp))
     goto done;
  
-    get_stack_args(fn_copy, esp, &save_ptr);
-    //palloc_free_page (fn_copy);
-    free(fn_copy);
+  get_stack_args(token, esp, &next);
+  palloc_free_page(token);
  
   /* Start address. */
   *eip = (void (*) (void)) ehdr.e_entry;
- 
   success = true;
-  
-  file_deny_write(file);
-   file_close (file);
-
  done:
   /* We arrive here whether the load is successful or not. */
-  
- // printf("done loading!!\n");
   return success;
 }
 
