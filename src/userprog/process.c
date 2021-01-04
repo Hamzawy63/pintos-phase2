@@ -416,7 +416,8 @@ load (const char *file_name, void (**eip) (void), void **esp)
   if (!setup_stack (esp))
     goto done;
  
-  get_stack_args(token, esp, &next);
+  //  get_stack_args(token, esp , &next);
+   split(file_name , esp) ; 
   palloc_free_page(token);
  
   /* Start address. */
@@ -575,8 +576,13 @@ install_page (void *upage, void *kpage, bool writable)
           && pagedir_set_page (t->pagedir, upage, kpage, writable));
 }
 
+int debug = 0 ; 
+int debug_length_byte = 16 ;
 void get_stack_args(char *file_name, void **esp, char **save_ptr)
 {
+  if(debug)
+     hex_dump((uintptr_t)*esp,*esp, sizeof(char)*8, true); 
+
  
     char *token = file_name;
     void *stack_pointer = *esp;
@@ -590,12 +596,15 @@ void get_stack_args(char *file_name, void **esp, char **save_ptr)
      * bar*/
     while (token != NULL)
     {
+         
         int arg_length = (strlen(token) + 1);
         total_length += arg_length;
         stack_pointer -= arg_length;
         memcpy(stack_pointer, token, arg_length);
         argc++;
         token = strtok_r(NULL, " ", save_ptr);
+        if(debug)
+          hex_dump((uintptr_t)*esp,*esp, sizeof(char)*8, true);
     }
     
     char *args_pointer = (char *) stack_pointer;
@@ -612,11 +621,13 @@ void get_stack_args(char *file_name, void **esp, char **save_ptr)
         stack_pointer -= word_align;
         memset(stack_pointer, 0, word_align);
     }
+     hex_dump((uintptr_t)*esp,*esp, sizeof(char)*8, true);
  
     /*adding null char*/
     stack_pointer -= sizeof(char *);
     memset(stack_pointer, 0, 1);
- 
+    if(debug)
+      hex_dump((uintptr_t)*esp,*esp, sizeof(char)*8, true);
     /*adding argument address*/
     int args_pushed = 0;
     while(argc > args_pushed)
@@ -625,19 +636,94 @@ void get_stack_args(char *file_name, void **esp, char **save_ptr)
         *((char **) stack_pointer) = args_pointer;
         args_pushed++;
         args_pointer += (strlen(args_pointer) + 1);
+
+        if(debug)
+          hex_dump((uintptr_t)*esp,*esp, sizeof(char)*8, true);
     }
+    
  
     /*adding char** */
     char ** first_fetch = (char **) stack_pointer;
     stack_pointer -= sizeof(char **);
     *((char ***) stack_pointer) = first_fetch;
- 
+    if(debug)
+      hex_dump((uintptr_t)*esp,*esp, sizeof(char)*8, true);
     /*adding number of arrguments*/
     stack_pointer -= sizeof(int);
     *(int *) (stack_pointer) = argc;
- 
+    if(debug)
+         hex_dump((uintptr_t)*esp,*esp, sizeof(char)*8, true);
     /*adding return address*/
     stack_pointer -= sizeof(int*);
     *(int *) (stack_pointer) = 0;
     *esp = stack_pointer;
+
+    if(debug)
+      hex_dump((uintptr_t)*esp,*esp, sizeof(char)*8, true);
+}
+void split(char *file_name , void **esp ) {
+
+  if(debug)hex_dump((uintptr_t)*esp,*esp, sizeof(char)*debug_length_byte, true);  
+  char *token = file_name;
+  char *save_ptr ; 
+  int argc = 0;
+  int *arg_address = calloc(30, sizeof(int)); // 30 is the maximum number of arguments allowed  
+
+  // push the addresses of each argument 
+ for(token = strtok_r(file_name , " " ,  &save_ptr) ; token != NULL ; token = strtok_r(NULL , " " , &save_ptr)) {
+   *esp -= (strlen(token  ) + 1 ) ; 
+   memcpy(*esp , token , strlen(token)+ 1 ) ; 
+   arg_address[argc++] = *esp ; 
+  if(debug)hex_dump((uintptr_t)*esp,*esp, sizeof(char)*8, true);  
+   ASSERT(argc < 30) ;
+
+ }
+
+  while((int)*esp%4!=0)
+  {
+    *esp-=sizeof(char); // one byte until it is a multiple of 4
+    char x = 0;
+    memcpy(*esp,&x,sizeof(char));
+  }
+
+  int z = 0 ; 
+  *esp -= sizeof(int) ;
+  memcpy(*esp , &z , sizeof(int)) ; 
+  if(debug)hex_dump((uintptr_t)*esp,*esp, sizeof(char)*8, true);  
+
+
+  // push the address of every argument from right to left (Yes, even the first argument)
+  for(int i=argc-1;i>=0;i--)
+  {
+    *esp-=sizeof(int);
+     memcpy(*esp,&arg_address[i],sizeof(int));
+       if(debug)hex_dump((uintptr_t)*esp,*esp, sizeof(char)*8, true);  
+  }
+
+
+
+  // push pointer to the pointer of the first argument in the stack 
+  *esp -= sizeof(int) ;
+  int target_pointer = *esp + sizeof(int) ;  
+  memcpy(*esp , &target_pointer , sizeof(int)) ; 
+  if(debug)hex_dump((uintptr_t)*esp,*esp, sizeof(char)*8, true);  
+
+
+
+  // push argc 
+   *esp -=sizeof(int) ; 
+   memcpy(*esp , &argc , sizeof(int));
+   if(debug)hex_dump((uintptr_t)*esp,*esp, sizeof(char)*8, true);  
+
+
+
+
+  // push fake return zero 
+  *esp = *esp - sizeof(int ) ; 
+  memcpy(*esp , &z , sizeof(int )) ; 
+  if(debug)hex_dump((uintptr_t)*esp,*esp, sizeof(char)*8, true);  
+
+
+  free(arg_address); // de-allocate the the temporary array 
+  
 }
