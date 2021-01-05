@@ -149,9 +149,7 @@ page_fault (struct intr_frame *f)
   user = (f->error_code & PF_U) != 0;
 
   validate_void_ptr(fault_addr);
-  if(!write)
-    sys_exit(-1);
-  if(!not_present)
+  if(!write || !not_present || !user)
     sys_exit(-1);
 
   /* To implement virtual memory, delete the rest of the function

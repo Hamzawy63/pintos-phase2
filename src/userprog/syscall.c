@@ -226,7 +226,7 @@ sys_open(char* name)
   {
     return -1;
   }
-  open->fd = thread_current()->fd_last++;
+  open->fd = ++thread_current()->fd_last;
   list_push_back(&thread_current()->open_file_list,&open->elem);
   return open->fd;
 }

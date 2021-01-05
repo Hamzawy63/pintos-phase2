@@ -295,6 +295,7 @@ void
 thread_yield (void) 
 {
   struct thread *cur = thread_current ();
+
   enum intr_level old_level;
   
   ASSERT (!intr_context ());

@@ -20,7 +20,9 @@
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
-void get_stack_args(char *file_name, void **esp, char **save_ptr);
+
+void 
+split(char* file_name , void** esp );
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -37,8 +39,8 @@ void get_stack_args(char *file_name, void **esp, char **save_ptr);
 tid_t
 process_execute (const char *file_name) 
 {
-  char *fn_copy;
-  char *name ; 
+  char* fn_copy;
+  char* name ; 
   char* next ;
   tid_t tid;
 
@@ -48,24 +50,33 @@ process_execute (const char *file_name)
 
   name = palloc_get_page (0);   // allocate page for the file name
 
-  if (fn_copy == NULL || name == NULL)
+  if (fn_copy == NULL || name == NULL) {
+    palloc_free_page(fn_copy);
+    palloc_free_page(name);
     return TID_ERROR;
+  }
+
   strlcpy (fn_copy, file_name, PGSIZE); // it check for null parameter in string.s 
 
   /* Extract the exec_name from the file name */ 
   strlcpy(name , file_name , PGSIZE) ; 
   name = strtok_r(name , " " , &next ) ; 
-  
 
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (name, PRI_DEFAULT, start_process, fn_copy);
 
-  sema_down(&thread_current()->parent_child_sync_sema);
-
   if (tid == TID_ERROR)
   {
-  	palloc_free_page (fn_copy);
-  	palloc_free_page (name);
+  	palloc_free_page(name);
+    palloc_free_page(fn_copy);
+    return TID_ERROR;
+  }
+
+  sema_down(&thread_current()->parent_child_sync_sema);
+
+  if (name)
+  {
+    palloc_free_page(name);
   }
 
   if (!thread_current()->is_child_creation_success) 
@@ -90,6 +101,7 @@ start_process (void *file_name_)
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
+
   success = load (file_name, &if_.eip, &if_.esp);
 
   struct thread* child = thread_current();
@@ -134,7 +146,6 @@ int
 process_wait (tid_t child_tid) 
 {
   struct thread* parent = thread_current();
-  parent->waiting_on = child_tid;
   struct thread* child = NULL;
   for (struct list_elem* e = list_begin (&parent->child_processe_list); e != list_end (&parent->child_processe_list);
   e = list_next (e))
@@ -162,31 +173,28 @@ process_exit (void)
   struct thread *cur = thread_current ();
   uint32_t *pd;
 
-  if (cur->parent_thread != NULL && cur->parent_thread->waiting_on == cur->tid)
-  {
-    sema_up(&cur->parent_thread->wait_child_sema);
-  }
-
   while (!list_empty(&cur->open_file_list))
   {
     struct open_file* opened_file = list_entry(list_pop_back(&cur->open_file_list), struct open_file, elem);
     file_close(opened_file->ptr);
     palloc_free_page(opened_file);
   }
-  
 
-  for (struct list_elem* e = list_begin (&cur->child_processe_list); e != list_end (&cur->child_processe_list);
-    e = list_next (e))
-    {
-      struct thread* child = list_entry(e, struct thread, child_elem);
-      sema_up(&child->parent_child_sync_sema);
-    }
+  while (!list_empty(&cur->child_processe_list))
+  {
+    struct thread* child = list_entry(list_pop_back(&cur->child_processe_list), struct thread, child_elem);
+    child->parent_thread = NULL;
+    sema_up(&child->parent_child_sync_sema);
+  }
   
   if (cur->executable_file != NULL)
   {
     file_allow_write(cur->executable_file);
     file_close(cur->executable_file);
   }
+
+  if (cur->parent_thread != NULL)
+    sema_up(&cur->parent_thread->wait_child_sema);
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
@@ -416,8 +424,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
   if (!setup_stack (esp))
     goto done;
  
-  //  get_stack_args(token, esp , &next);
-   split(file_name , esp) ; 
+  split(file_name , esp);
   palloc_free_page(token);
  
   /* Start address. */
@@ -578,100 +585,19 @@ install_page (void *upage, void *kpage, bool writable)
 
 int debug = 0 ; 
 int debug_length_byte = 16 ;
-void get_stack_args(char *file_name, void **esp, char **save_ptr)
-{
-  if(debug)
-     hex_dump((uintptr_t)*esp,*esp, sizeof(char)*8, true); 
 
- 
-    char *token = file_name;
-    void *stack_pointer = *esp;
-    int argc = 0;
-    int total_length = 0;
-    /*split and insert in the stack
-     * /bin/ls -l foo bar
-     * /bin/ls
-     * -l
-     * foo
-     * bar*/
-    while (token != NULL)
-    {
-         
-        int arg_length = (strlen(token) + 1);
-        total_length += arg_length;
-        stack_pointer -= arg_length;
-        memcpy(stack_pointer, token, arg_length);
-        argc++;
-        token = strtok_r(NULL, " ", save_ptr);
-        if(debug)
-          hex_dump((uintptr_t)*esp,*esp, sizeof(char)*8, true);
-    }
-    
-    char *args_pointer = (char *) stack_pointer;
- 
-    /*adding word align*/
-    int  word_align = 0;
-    while (total_length % 4 != 0)
-    {
-        word_align++;
-        total_length++;
-    }
-    if (word_align != 0)
-    {
-        stack_pointer -= word_align;
-        memset(stack_pointer, 0, word_align);
-    }
-     hex_dump((uintptr_t)*esp,*esp, sizeof(char)*8, true);
- 
-    /*adding null char*/
-    stack_pointer -= sizeof(char *);
-    memset(stack_pointer, 0, 1);
-    if(debug)
-      hex_dump((uintptr_t)*esp,*esp, sizeof(char)*8, true);
-    /*adding argument address*/
-    int args_pushed = 0;
-    while(argc > args_pushed)
-    {
-        stack_pointer -= sizeof(char *);
-        *((char **) stack_pointer) = args_pointer;
-        args_pushed++;
-        args_pointer += (strlen(args_pointer) + 1);
-
-        if(debug)
-          hex_dump((uintptr_t)*esp,*esp, sizeof(char)*8, true);
-    }
-    
- 
-    /*adding char** */
-    char ** first_fetch = (char **) stack_pointer;
-    stack_pointer -= sizeof(char **);
-    *((char ***) stack_pointer) = first_fetch;
-    if(debug)
-      hex_dump((uintptr_t)*esp,*esp, sizeof(char)*8, true);
-    /*adding number of arrguments*/
-    stack_pointer -= sizeof(int);
-    *(int *) (stack_pointer) = argc;
-    if(debug)
-         hex_dump((uintptr_t)*esp,*esp, sizeof(char)*8, true);
-    /*adding return address*/
-    stack_pointer -= sizeof(int*);
-    *(int *) (stack_pointer) = 0;
-    *esp = stack_pointer;
-
-    if(debug)
-      hex_dump((uintptr_t)*esp,*esp, sizeof(char)*8, true);
-}
-void split(char *file_name , void **esp ) {
+void 
+split(char* file_name , void** esp ) {
 
   if(debug)hex_dump((uintptr_t)*esp,*esp, sizeof(char)*debug_length_byte, true);  
-  char *token = file_name;
-  char *save_ptr ; 
+  char* token = file_name;
+  char* next; 
   int argc = 0;
-  int *arg_address = calloc(30, sizeof(int)); // 30 is the maximum number of arguments allowed  
+  int* arg_address = calloc(30, sizeof(int)); // 30 is the maximum number of arguments allowed  
 
   // push the addresses of each argument 
- for(token = strtok_r(file_name , " " ,  &save_ptr) ; token != NULL ; token = strtok_r(NULL , " " , &save_ptr)) {
-   *esp -= (strlen(token  ) + 1 ) ; 
+ for(token = strtok_r(file_name , " " ,  &next) ; token != NULL ; token = strtok_r(NULL , " " , &next)) {
+   *esp -= (strlen(token) + 1 ) ; 
    memcpy(*esp , token , strlen(token)+ 1 ) ; 
    arg_address[argc++] = *esp ; 
   if(debug)hex_dump((uintptr_t)*esp,*esp, sizeof(char)*8, true);  
@@ -681,9 +607,9 @@ void split(char *file_name , void **esp ) {
 
   while((int)*esp%4!=0)
   {
-    *esp-=sizeof(char); // one byte until it is a multiple of 4
-    char x = 0;
-    memcpy(*esp,&x,sizeof(char));
+    *esp -= 1; // one byte until it is a multiple of 4
+    char x = '\0';
+    memcpy(*esp,&x,1);
   }
 
   int z = 0 ; 
@@ -703,7 +629,7 @@ void split(char *file_name , void **esp ) {
 
 
   // push pointer to the pointer of the first argument in the stack 
-  *esp -= sizeof(int) ;
+  *esp -= sizeof(int);
   int target_pointer = *esp + sizeof(int) ;  
   memcpy(*esp , &target_pointer , sizeof(int)) ; 
   if(debug)hex_dump((uintptr_t)*esp,*esp, sizeof(char)*8, true);  

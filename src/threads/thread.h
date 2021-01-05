@@ -108,7 +108,6 @@ struct thread
     struct thread* parent_thread;        // parent of the process
     bool is_child_creation_success;
     int child_status;
-    tid_t waiting_on;
     struct file* executable_file;
     struct semaphore wait_child_sema;
     struct semaphore parent_child_sync_sema;
